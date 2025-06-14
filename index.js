@@ -3,7 +3,7 @@ require("dotenv").config();
 const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, sessionId, providedSecret, handlers = {}, App, Instruction ) => {
   const {getChatSession,createTransaction,checkOrderDetails,processMessage,fetchKnowledgeBasedData, assignHumanAgent,createOrder} = handlers;
 
-  if (providedSecret !== process.env.WORKFLOW_SECRET) {
+  if (providedSecret !== "a11cf9f7-bda2-48a0-be3a-c56fef2b053a25") {
     throw new Error("Unauthorized access to workflow");
   }
 
