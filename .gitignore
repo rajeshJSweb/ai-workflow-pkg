@@ -3,9 +3,3 @@ node_modules/
 
 # Ignore all .env files
 .env
-
-# Ignore all log files
-*.log
-
-# Firebase credentials
-*.json
