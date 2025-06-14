@@ -1,0 +1,11 @@
+# Ignore node_modules directory
+node_modules/
+
+# Ignore all .env files
+.env
+
+# Ignore all log files
+*.log
+
+# Firebase credentials
+*.json
