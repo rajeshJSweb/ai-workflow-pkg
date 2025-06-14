@@ -1,0 +1,17 @@
+{
+  "name": "ai-workflow-pkg",
+  "version": "1.0.2",
+  "description": "",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google-cloud/vertexai": "^1.10.0",
+    "dotenv": "^16.5.0"
+  }
+}
