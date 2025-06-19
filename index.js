@@ -1,7 +1,27 @@
+const { systemPrompt } = require("./ai/instruction/systemPrompt");
+
 require("dotenv").config();
 
-const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, sessionId, providedSecret, handlers = {}, App, Instruction ) => {
-  const {getChatSession,createTransaction,checkOrderDetails,processMessage,fetchKnowledgeBasedData, assignHumanAgent,createOrder} = handlers;
+const handleAIFunctionWorkflow = async (
+  app_id,
+  messageText,
+  from,
+  senderId,
+  sessionId,
+  providedSecret,
+  handlers = {},
+  App,
+  Instruction
+) => {
+  const {
+    getChatSession,
+    createTransaction,
+    checkOrderDetails,
+    processMessage,
+    fetchKnowledgeBasedData,
+    assignHumanAgent,
+    createOrder,
+  } = handlers;
 
   // if (providedSecret !== "a11cf9f7-bda2-48a0-be3a-c56fef2b053a25") {
   //   throw new Error("Unauthorized access to workflow");
@@ -12,9 +32,13 @@ const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, ses
   const data = app.knowledgeBase.instructions.find((curElm) => curElm.isActive);
 
   const systemInstruction = instructions.find((curElm) => curElm.tool === app?.service);
-  const defaultInstruction = "You are a helpful, knowledgeable, and friendly assistant.";
+  const defaultInstruction ="You are a helpful, knowledgeable, and friendly assistant.";
 
-  const chat = getChatSession(senderId, data?.instruction, systemInstruction?.instruction || defaultInstruction);
+  const fullInstruction = `[STRICT PRIMARY RULES - ALWAYS FOLLOW] ${systemPrompt}
+  
+  [ADDITIONAL USER INSTRUCTIONS - FOLLOW IF COMPATIBLE] ${data?.instruction || "N/A"}`;
+
+  const chat = getChatSession(senderId, fullInstruction, systemInstruction?.instruction || defaultInstruction);
   const roleMap = { user: "User", function: "Data", assistant: "Assistant" };
 
   if (chat?.historyInternal) {
@@ -23,7 +47,12 @@ const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, ses
 
   try {
     const historyContext = chat.historyInternal
-      .map((msg) => `${roleMap[msg.role]}: ${msg.role === "function" ? msg.content : msg.parts[0].text}`)
+      .map(
+        (msg) =>
+          `${roleMap[msg.role]}: ${
+            msg.role === "function" ? msg.content : msg.parts[0].text
+          }`
+      )
       .join("\n");
 
     const response = await chat.sendMessage(messageText);
@@ -35,7 +64,12 @@ const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, ses
         case "fetchProductData": {
           const searchParams = functionCall.args;
           const { results, explanation, images } = await processMessage(
-            app_id, historyContext, sessionId, from, senderId, searchParams
+            app_id,
+            historyContext,
+            sessionId,
+            from,
+            senderId,
+            searchParams
           );
 
           const result = await chat.sendMessage([
@@ -48,7 +82,8 @@ const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, ses
           ]);
 
           return {
-            responseContent: result.response.candidates[0]?.content?.parts[0]?.text,
+            responseContent:
+              result.response.candidates[0]?.content?.parts[0]?.text,
             images,
           };
         }
@@ -69,22 +104,32 @@ const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, ses
         case "collectPaymentInfo": {
           const transactionData = functionCall.args;
 
-          if (!createTransaction) throw new Error("createTransaction handler not provided");
+          if (!createTransaction)
+            throw new Error("createTransaction handler not provided");
           const { responseContent } = await createTransaction(transactionData);
           return { responseContent };
         }
 
         case "assignHumanAgent": {
           const { orderNumber, reason } = functionCall.args;
-          const { responseContent } = await assignHumanAgent(orderNumber, app_id, senderId, reason);
+          const { responseContent } = await assignHumanAgent(
+            orderNumber,
+            app_id,
+            senderId,
+            reason
+          );
           return { responseContent };
         }
 
         case "checkOrderDetails": {
-          if (!checkOrderDetails) throw new Error("checkOrderDetails handler not provided");
+          if (!checkOrderDetails)
+            throw new Error("checkOrderDetails handler not provided");
 
           const { orderNumber } = functionCall.args;
-          const { responseContent, otp, order } = await checkOrderDetails(orderNumber, app_id);
+          const { responseContent, otp, order } = await checkOrderDetails(
+            orderNumber,
+            app_id
+          );
 
           const result = await chat.sendMessage([
             {
@@ -96,7 +141,8 @@ const handleAIFunctionWorkflow = async (app_id, messageText, from, senderId, ses
           ]);
 
           return {
-            responseContent: result.response.candidates[0]?.content?.parts[0]?.text,
+            responseContent:
+              result.response.candidates[0]?.content?.parts[0]?.text,
           };
         }
       }
