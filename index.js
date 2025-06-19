@@ -32,13 +32,8 @@ const handleAIFunctionWorkflow = async (
   const data = app.knowledgeBase.instructions.find((curElm) => curElm.isActive);
 
   const systemInstruction = instructions.find((curElm) => curElm.tool === app?.service);
-  const defaultInstruction ="You are a helpful, knowledgeable, and friendly assistant.";
 
-  const fullInstruction = `[STRICT PRIMARY RULES - ALWAYS FOLLOW] ${systemPrompt}
-  
-  [ADDITIONAL USER INSTRUCTIONS - FOLLOW IF COMPATIBLE] ${data?.instruction || "N/A"}`;
-
-  const chat = getChatSession(senderId, fullInstruction, systemInstruction?.instruction || defaultInstruction);
+  const chat = getChatSession(senderId, data?.instruction, systemInstruction?.instruction || systemPrompt);
   const roleMap = { user: "User", function: "Data", assistant: "Assistant" };
 
   if (chat?.historyInternal) {
