@@ -62,10 +62,10 @@ If the repository is private, you have two options:
 After installation, import and use functions as needed:
 
 ```js
-const { someFunction } = require("ai-workflow-pkg");
+const { handleAIFunctionWorkflow } = require("ai-workflow-pkg");
 
 // Use it in your logic
-someFunction();
+handleAIFunctionWorkflow();
 ```
 
 ---
