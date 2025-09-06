@@ -1,5 +1,4 @@
 const { systemPrompt } = require("./ai/instruction/systemPrompt");
-
 require("dotenv").config();
 
 const handleAIFunctionWorkflow = async (
@@ -24,14 +23,18 @@ const handleAIFunctionWorkflow = async (
     fetchCombinedProductData,
   } = handlers;
 
+  // Security check (currently disabled)
   // if (providedSecret !== "a11cf9f7-bda2-48a0-be3a-c56fef2b053a25") {
   //   throw new Error("Unauthorized access to workflow");
   // }
 
+  console.log("Checking pkg"); // Debug placeholder
+
+  // Fetch app and instructions
   const app = await App.findOne({ app_id });
   const instructions = await Instruction.find().lean();
-  const data = app.knowledgeBase.instructions.find((curElm) => curElm.isActive);
 
+  const data = app.knowledgeBase.instructions.find((curElm) => curElm.isActive);
   const systemInstruction = instructions.find(
     (curElm) => curElm.tool === app?.service
   );
@@ -39,18 +42,28 @@ const handleAIFunctionWorkflow = async (
   const defaultInstruction =
     "You are a helpful, knowledgeable, and friendly assistant for our brand who communicates clearly and concisely. Always be polite and professional.";
 
+  // Initialize chat session
   const chat = getChatSession(
     senderId,
     data?.instruction,
     systemInstruction?.instruction || defaultInstruction
   );
-  const roleMap = { user: "User", function: "Data", assistant: "Assistant" };
+
+  const roleMap = {
+    user: "User",
+    function: "Data",
+    assistant: "Assistant",
+  };
 
   if (chat?.historyInternal) {
-    chat.historyInternal.push({ role: "user", parts: [{ text: messageText }] });
+    chat.historyInternal.push({
+      role: "user",
+      parts: [{ text: messageText }],
+    });
   }
 
   try {
+    // Build conversation history context
     const historyContext = chat.historyInternal
       .map(
         (msg) =>
@@ -60,12 +73,14 @@ const handleAIFunctionWorkflow = async (
       )
       .join("\n");
 
+    // Send message to AI
     const response = await chat.sendMessage(messageText);
     const candidates = response.response?.candidates || response.candidates;
     const functionCall = candidates?.[0]?.content?.parts?.[0]?.functionCall;
 
     console.log("Function Call:", functionCall);
 
+    // Handle function calls
     if (functionCall) {
       switch (functionCall.name) {
         case "fetchProductData": {
@@ -74,6 +89,7 @@ const handleAIFunctionWorkflow = async (
             app_id,
             searchParams
           );
+
           console.log("From Workflow:-", googleDataFromMongo.data.length);
 
           const result = await chat.sendMessage([
@@ -87,10 +103,11 @@ const handleAIFunctionWorkflow = async (
               },
             },
           ]);
+
           return {
             responseContent:
               result.response.candidates[0]?.content?.parts[0]?.text,
-            searchParams: searchParams,
+            searchParams,
           };
         }
 
@@ -99,16 +116,16 @@ const handleAIFunctionWorkflow = async (
             messageText,
             app_id
           );
+
           const result = await chat.sendMessage([
             {
               functionResponse: {
                 name: "getKnowledgebaseAnswer",
-                response: {
-                  results: response,
-                },
+                response: { results: response },
               },
             },
           ]);
+
           return {
             responseContent:
               result.response.candidates[0]?.content?.parts[0]?.text,
@@ -122,12 +139,11 @@ const handleAIFunctionWorkflow = async (
             {
               functionResponse: {
                 name: "getFAQAnswer",
-                response: {
-                  results: response,
-                },
+                response: { results: response },
               },
             },
           ]);
+
           return {
             responseContent:
               result.response.candidates[0]?.content?.parts[0]?.text,
@@ -138,7 +154,6 @@ const handleAIFunctionWorkflow = async (
           const orderDetails = functionCall.args.order_details;
           const newOrder = await createOrder(orderDetails, app_id, senderId);
 
-          // console.log("Order details args", orderDetails);
           return {
             responseContent: `✅ Your order has been successfully submitted!\n\n🛒 *Order Confirmation Number:* **${newOrder.orderNumber}**\n\nThank you for shopping with us! 🎉`,
           };
@@ -147,11 +162,13 @@ const handleAIFunctionWorkflow = async (
         case "collectPaymentInfo": {
           const transactionData = functionCall.args;
           const { responseContent } = await createTransaction(transactionData);
+
           return { responseContent };
         }
 
         case "assignHumanAgent": {
           const { orderNumber, reason } = functionCall.args;
+
           const { responseContent } = await assignHumanAgent(
             orderNumber,
             app_id,
@@ -164,6 +181,7 @@ const handleAIFunctionWorkflow = async (
 
         case "checkOrderDetails": {
           const { orderNumber } = functionCall.args;
+
           const { responseContent, otp, order } = await checkOrderDetails(
             orderNumber,
             app_id
@@ -175,7 +193,7 @@ const handleAIFunctionWorkflow = async (
                 name: "checkOrderDetails",
                 response: {
                   explanation: responseContent,
-                  otp: otp,
+                  otp,
                   order,
                 },
               },
@@ -187,6 +205,7 @@ const handleAIFunctionWorkflow = async (
               result.response.candidates[0]?.content?.parts[0]?.text,
           };
         }
+
         case "getCompanyInfo": {
           const { response } = await fetchKnowledgeBasedData(
             messageText,
@@ -197,12 +216,11 @@ const handleAIFunctionWorkflow = async (
             {
               functionResponse: {
                 name: "getCompanyInfo",
-                response: {
-                  results: response,
-                },
+                response: { results: response },
               },
             },
           ]);
+
           return {
             responseContent:
               result.response.candidates[0]?.content?.parts[0]?.text,
@@ -211,6 +229,7 @@ const handleAIFunctionWorkflow = async (
       }
     }
 
+    // Default response when no function call
     const textResponse = candidates?.[0]?.content?.parts?.[0]?.text;
     return { responseContent: textResponse };
   } catch (error) {
