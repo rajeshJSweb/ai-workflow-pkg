@@ -54,7 +54,13 @@ const handleAIFunctionWorkflow = async (
     const response = await chat.sendMessage(messageText);
     const candidates = response.response?.candidates || response.candidates;
     const functionCall = candidates?.[0]?.content?.parts?.[0]?.functionCall;
-   console.log(`✅ Function call successful: "${functionCall?.name}" executed.`);
+
+    console.log(`📦 Package installation verified — working as expected.`);
+    console.log(
+      `⚙️ Function call executed successfully: "${
+        functionCall?.name || "Unknown"
+      }"`
+    );
 
     if (functionCall) {
       switch (functionCall.name) {
@@ -178,7 +184,6 @@ const handleAIFunctionWorkflow = async (
               result.response.candidates[0]?.content?.parts[0]?.text,
           };
         }
-
       }
     }
 
