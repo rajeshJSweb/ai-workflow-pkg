@@ -11,7 +11,6 @@ const handleAIFunctionWorkflow = async (
   App,
   Instruction
 ) => {
-  console.log("✅ Package successfully installed and working as expected.");
   const {
     getChatSession,
     createTransaction,
