@@ -1,4 +1,3 @@
-const { systemPrompt } = require("./ai/instruction/systemPrompt");
 require("dotenv").config();
 
 const handleAIFunctionWorkflow = async (
@@ -12,6 +11,7 @@ const handleAIFunctionWorkflow = async (
   App,
   Instruction
 ) => {
+  console.log("✅ Package successfully installed and working as expected.");
   const {
     getChatSession,
     createTransaction,
@@ -23,37 +23,25 @@ const handleAIFunctionWorkflow = async (
     fetchCombinedProductData,
   } = handlers;
 
-  // Security check (currently disabled)
-  // if (providedSecret !== "a11cf9f7-bda2-48a0-be3a-c56fef2b053a25") {
-  //   throw new Error("Unauthorized access to workflow");
-  // }
+  const appData = await App.findOne({ app_id });
+  let matchedInstruction = null;
 
-  console.log("Checking pkg"); // Debug placeholder
+  if (appData?.knowledgeBase?.instructions?.length > 0) {
+    matchedInstruction = appData.knowledgeBase.instructions.find(
+      (instruction) =>
+        instruction.isActive && instruction.tool === appData.service
+    );
+  }
 
-  // Fetch app and instructions
-  const app = await App.findOne({ app_id });
-  const instructions = await Instruction.find().lean();
+  if (!matchedInstruction) {
+    const allGlobalInstructions = await Instruction.find();
+    matchedInstruction = allGlobalInstructions.find(
+      (instruction) =>
+        instruction.tool === appData.service && instruction.isActive
+    );
+  }
 
-  const data = app.knowledgeBase.instructions.find((curElm) => curElm.isActive);
-  const systemInstruction = instructions.find(
-    (curElm) => curElm.tool === app?.service
-  );
-
-  const defaultInstruction =
-    "You are a helpful, knowledgeable, and friendly assistant for our brand who communicates clearly and concisely. Always be polite and professional.";
-
-  // Initialize chat session
-  const chat = getChatSession(
-    senderId,
-    data?.instruction,
-    systemInstruction?.instruction || defaultInstruction
-  );
-
-  const roleMap = {
-    user: "User",
-    function: "Data",
-    assistant: "Assistant",
-  };
+  const chat = getChatSession(senderId, matchedInstruction);
 
   if (chat?.historyInternal) {
     chat.historyInternal.push({
@@ -63,24 +51,10 @@ const handleAIFunctionWorkflow = async (
   }
 
   try {
-    // Build conversation history context
-    const historyContext = chat.historyInternal
-      .map(
-        (msg) =>
-          `${roleMap[msg.role]}: ${
-            msg.role === "function" ? msg.content : msg.parts[0].text
-          }`
-      )
-      .join("\n");
-
-    // Send message to AI
     const response = await chat.sendMessage(messageText);
     const candidates = response.response?.candidates || response.candidates;
     const functionCall = candidates?.[0]?.content?.parts?.[0]?.functionCall;
 
-    console.log("Function Call:", functionCall);
-
-    // Handle function calls
     if (functionCall) {
       switch (functionCall.name) {
         case "fetchProductData": {
@@ -89,8 +63,6 @@ const handleAIFunctionWorkflow = async (
             app_id,
             searchParams
           );
-
-          console.log("From Workflow:-", googleDataFromMongo.data.length);
 
           const result = await chat.sendMessage([
             {
@@ -206,30 +178,9 @@ const handleAIFunctionWorkflow = async (
           };
         }
 
-        case "getCompanyInfo": {
-          const { response } = await fetchKnowledgeBasedData(
-            messageText,
-            app_id
-          );
-
-          const result = await chat.sendMessage([
-            {
-              functionResponse: {
-                name: "getCompanyInfo",
-                response: { results: response },
-              },
-            },
-          ]);
-
-          return {
-            responseContent:
-              result.response.candidates[0]?.content?.parts[0]?.text,
-          };
-        }
       }
     }
 
-    // Default response when no function call
     const textResponse = candidates?.[0]?.content?.parts?.[0]?.text;
     return { responseContent: textResponse };
   } catch (error) {
