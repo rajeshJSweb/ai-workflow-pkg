@@ -54,6 +54,7 @@ const handleAIFunctionWorkflow = async (
     const response = await chat.sendMessage(messageText);
     const candidates = response.response?.candidates || response.candidates;
     const functionCall = candidates?.[0]?.content?.parts?.[0]?.functionCall;
+   console.log(`✅ Function call successful: "${functionCall?.name}" executed.`);
 
     if (functionCall) {
       switch (functionCall.name) {
