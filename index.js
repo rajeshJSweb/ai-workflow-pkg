@@ -40,6 +40,11 @@ const handleAIFunctionWorkflow = async (
     );
   }
 
+  if (!matchedInstruction) {
+    matchedInstruction = `You are an intelligent, friendly, and professional support assistant. 
+Your goal is to help users clearly, efficiently, and politely with any questions related to this app’s service: ${appData?.company}`;
+  }
+
   const chat = getChatSession(senderId, matchedInstruction);
 
   if (chat?.historyInternal) {
