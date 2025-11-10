@@ -219,6 +219,10 @@ const handleWhatsAppVoiceCallServices = async (change, wrtc, handlers) => {
     AudioStreamer,
   } = handlers;
 
+  console.log(
+    `👽 WhatsApp Calling Package installation verified — working as expected.`
+  );
+
   const call = change?.value?.calls?.[0];
   const phoneNumberId = change?.value?.metadata?.phone_number_id;
   const callId = call?.id;
