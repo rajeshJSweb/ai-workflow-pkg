@@ -45,7 +45,7 @@ const handleAIFunctionWorkflow = async (
 Your goal is to help users clearly, efficiently, and politely with any questions related to this app’s service: ${appData?.company}`;
   }
 
-  const chat = getChatSession(senderId, matchedInstruction);
+  const chat = getChatSession(app_id, senderId, matchedInstruction);
 
   if (chat?.historyInternal) {
     chat.historyInternal.push({
