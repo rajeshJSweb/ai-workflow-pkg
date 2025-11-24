@@ -1,4 +1,4 @@
-require("dotenv").config();
+
 
 const handleAIFunctionWorkflow = async (
   app_id,
@@ -20,16 +20,36 @@ const handleAIFunctionWorkflow = async (
     createOrder,
     getFAQAnswer,
     fetchCombinedProductData,
+    checkCustomerDataAndSendEmail,
+    User,
+    getSystemInstruction,
+    getVertexUserSession
   } = handlers;
 
   const appData = await App.findOne({ app_id });
+  const existingUser = await User.findOne({ app_id: app_id });
+
+  let isOtpServiceEnabled = false;
+  if (existingUser && existingUser.permissions) {
+    isOtpServiceEnabled =
+      typeof existingUser.permissions.get === "function"
+        ? existingUser.permissions.get("isOtpService")
+        : existingUser.permissions.isOtpService;
+  }
+  isOtpServiceEnabled = isOtpServiceEnabled === true;
+
+  let currentDomain =
+    typeof appData?.service === "string" ? appData.service : "BANKING";
   let matchedInstruction = null;
 
   if (appData?.knowledgeBase?.instructions?.length > 0) {
-    matchedInstruction = appData.knowledgeBase.instructions.find(
-      (instruction) =>
-        instruction.isActive && instruction.tool === appData.service
+    const activeAppInstruction = appData.knowledgeBase.instructions.find(
+      (instruction) => instruction.isActive === true
     );
+    if (activeAppInstruction) {
+      matchedInstruction = activeAppInstruction;
+      if (activeAppInstruction.tool) currentDomain = activeAppInstruction.tool;
+    }
   }
 
   if (!matchedInstruction) {
@@ -40,34 +60,172 @@ const handleAIFunctionWorkflow = async (
     );
   }
 
-  if (!matchedInstruction) {
-    matchedInstruction = `You are an intelligent, friendly, and professional support assistant. 
-Your goal is to help users clearly, efficiently, and politely with any questions related to this app’s service: ${appData?.company}`;
-  }
+  const customInstructionText =
+    matchedInstruction?.instruction ||
+    `You are an intelligent support assistant for ${
+      appData?.company || "our service"
+    }.`;
 
-  const chat = getChatSession(app_id, senderId, matchedInstruction);
+  const domain = currentDomain.toUpperCase();
+  const companyName = appData?.company || "Our Service";
+
+  const finalRobustInstruction = getSystemInstruction(
+    domain,
+    customInstructionText,
+    companyName
+  );
+
+  const chat = getChatSession(app_id, senderId, finalRobustInstruction);
+  const currentUserState = getVertexUserSession(senderId);
 
   if (chat?.historyInternal) {
-    chat.historyInternal.push({
-      role: "user",
-      parts: [{ text: messageText }],
-    });
+    chat.historyInternal.push({ role: "user", parts: [{ text: messageText }] });
   }
 
   try {
-    const response = await chat.sendMessage(messageText);
-    const candidates = response.response?.candidates || response.candidates;
-    const functionCall = candidates?.[0]?.content?.parts?.[0]?.functionCall;
+    let response = await chat.sendMessage(messageText);
+    let functionCall =
+      response.response?.candidates?.[0]?.content?.parts?.[0]?.functionCall;
 
-    console.log(`📦 Package installation verified — working as expected.`);
-    console.log(
-      `⚙️ Function call executed successfully: "${
-        functionCall?.name || "Unknown"
-      }"`
-    );
+    let loopCount = 0;
+    const MAX_LOOPS = 5;
 
-    if (functionCall) {
+    while (functionCall && loopCount < MAX_LOOPS) {
+      loopCount++;
+      console.log(
+        `⚙️ [Loop ${loopCount}] Executing Tool: "${functionCall.name}"`
+      );
+
+      let toolResultResponse = {};
+
       switch (functionCall.name) {
+        case "checkSecurityStatus": {
+          const { intent } = functionCall.args;
+          const isVerified = currentUserState.isVerified;
+
+          let status = "verification_required";
+          let instruction = "ACCESS DENIED. Ask for phone number.";
+
+          console.log(
+            `🛡️ OTP Check: Enabled=${isOtpServiceEnabled}, Verified=${isVerified}`
+          );
+
+          if (!isOtpServiceEnabled) {
+            status = "approved";
+            instruction =
+              "ACCESS GRANTED (OTP Disabled). PROCEED IMMEDIATELY to call the requested data tool.";
+          } else if (isVerified) {
+            status = "approved";
+            instruction = "ACCESS GRANTED. User is verified.";
+          }
+
+          toolResultResponse = { status, instruction };
+          break;
+        }
+
+        case "sendOTPForVerification": {
+          let { phoneNumber } = functionCall.args;
+          phoneNumber = String(phoneNumber).replace(/\D/g, "");
+
+          if (
+            phoneNumber.length === 22 &&
+            phoneNumber.substring(0, 11) === phoneNumber.substring(11)
+          ) {
+            phoneNumber = phoneNumber.substring(0, 11);
+          }
+          if (phoneNumber.length > 13 && phoneNumber.startsWith("880")) {
+            const match = phoneNumber.match(/(01\d{9})/);
+            if (match) phoneNumber = match[0];
+          }
+
+          const { status, message, generatedOtp } =
+            await checkCustomerDataAndSendEmail(phoneNumber);
+
+          if (status && generatedOtp) {
+            currentUserState.currentOtp = String(generatedOtp).trim();
+            currentUserState.customerPhone = phoneNumber;
+            currentUserState.isVerified = false;
+            console.log(`🔐 OTP SAVED: ${currentUserState.currentOtp}`);
+          }
+          toolResultResponse = { status, message };
+          break;
+        }
+
+        case "verifyOTP": {
+          const { otp } = functionCall.args;
+          const storedOtp = currentUserState.currentOtp
+            ? String(currentUserState.currentOtp).trim()
+            : null;
+          let inputOtp = otp ? String(otp).trim().replace(/\D/g, "") : "";
+
+          if (
+            inputOtp.length > 0 &&
+            inputOtp.length % 2 === 0 &&
+            inputOtp.substring(0, inputOtp.length / 2) ===
+              inputOtp.substring(inputOtp.length / 2)
+          ) {
+            inputOtp = inputOtp.substring(0, inputOtp.length / 2);
+          }
+
+          console.log(
+            `🔐 VERIFYING: Input('${inputOtp}') vs Stored('${storedOtp}')`
+          );
+
+          let isSuccess = false;
+          let msg = "";
+
+          if (!storedOtp) {
+            isSuccess = false;
+            msg =
+              "System Error: OTP expired/not found. Ask for phone number again.";
+          } else if (storedOtp === inputOtp) {
+            currentUserState.isVerified = true;
+            currentUserState.currentOtp = null;
+            isSuccess = true;
+            msg = "Verification Successful! Access Granted.";
+          } else {
+            isSuccess = false;
+            msg = "Verification Failed. Code incorrect.";
+          }
+          toolResultResponse = { status: isSuccess, message: msg };
+          break;
+        }
+
+        case "checkOrderInfo": {
+          let { orderNumber } = functionCall.args;
+          orderNumber = String(orderNumber).trim();
+
+          if (
+            orderNumber.length > 0 &&
+            orderNumber.length % 2 === 0 &&
+            orderNumber.substring(0, orderNumber.length / 2) ===
+              orderNumber.substring(orderNumber.length / 2)
+          ) {
+            orderNumber = orderNumber.substring(0, orderNumber.length / 2);
+          }
+
+          console.log(`📦 Checking Order: ${orderNumber}`);
+          const { responseContent, order } = await checkOrderDetails(
+            orderNumber,
+            app_id
+          );
+
+          const cleanOrder = order
+            ? {
+                id: order.orderNumber,
+                status: order.status,
+                date: order.deliveryDate,
+                address: order.customerAddress || "Not Provided",
+              }
+            : "Not Found";
+
+          toolResultResponse = {
+            info: responseContent,
+            order: cleanOrder,
+          };
+          break;
+        }
+
         case "fetchProductData": {
           const searchParams = functionCall.args;
           const googleDataFromMongo = await fetchCombinedProductData(
@@ -93,322 +251,66 @@ Your goal is to help users clearly, efficiently, and politely with any questions
             searchParams,
           };
         }
-
         case "getKnowledgebaseAnswer": {
           const { response } = await fetchKnowledgeBasedData(
             messageText,
             app_id
           );
-
-          const result = await chat.sendMessage([
-            {
-              functionResponse: {
-                name: "getKnowledgebaseAnswer",
-                response: { results: response },
-              },
-            },
-          ]);
-
-          return {
-            responseContent:
-              result.response.candidates[0]?.content?.parts[0]?.text,
-          };
+          toolResultResponse = { results: response };
+          break;
         }
-
         case "getFAQAnswer": {
           const { response } = await getFAQAnswer(messageText, app_id);
-
-          const result = await chat.sendMessage([
-            {
-              functionResponse: {
-                name: "getFAQAnswer",
-                response: { results: response },
-              },
-            },
-          ]);
-
-          return {
-            responseContent:
-              result.response.candidates[0]?.content?.parts[0]?.text,
-          };
+          toolResultResponse = { results: response };
+          break;
         }
-
         case "submitOrder": {
-          const orderDetails = functionCall.args.order_details;
-          const newOrder = await createOrder(orderDetails, app_id, senderId);
-
-          return {
-            responseContent: `✅ Your order has been successfully submitted!\n\n🛒 *Order Confirmation Number:* **${newOrder.orderNumber}**\n\nThank you for shopping with us! 🎉`,
+          const newOrder = await createOrder(
+            functionCall.args.order_details,
+            app_id,
+            senderId
+          );
+          toolResultResponse = {
+            result: `Order Created: ${newOrder.orderNumber}`,
           };
+          break;
         }
-
-        case "collectPaymentInfo": {
-          const transactionData = functionCall.args;
-          const { responseContent } = await createTransaction(transactionData);
-
-          return { responseContent };
-        }
-
         case "assignHumanAgent": {
-          const { orderNumber, reason } = functionCall.args;
-
           const { responseContent } = await assignHumanAgent(
-            orderNumber,
+            functionCall.args.orderNumber,
             app_id,
             senderId,
-            reason
+            functionCall.args.reason
           );
-
-          return { responseContent };
+          toolResultResponse = { result: responseContent };
+          break;
         }
 
-        case "checkOrderDetails": {
-          const { orderNumber } = functionCall.args;
-
-          const { responseContent, otp, order } = await checkOrderDetails(
-            orderNumber,
-            app_id
-          );
-
-          const result = await chat.sendMessage([
-            {
-              functionResponse: {
-                name: "checkOrderDetails",
-                response: {
-                  explanation: responseContent,
-                  otp,
-                  order,
-                },
-              },
-            },
-          ]);
-
-          return {
-            responseContent:
-              result.response.candidates[0]?.content?.parts[0]?.text,
-          };
-        }
+        default:
+          console.warn(`⚠️ Unknown Tool: ${functionCall.name}`);
+          toolResultResponse = { error: "Unknown tool" };
+          break;
       }
+      response = await chat.sendMessage([
+        {
+          functionResponse: {
+            name: functionCall.name,
+            response: toolResultResponse,
+          },
+        },
+      ]);
+
+      functionCall =
+        response.response?.candidates?.[0]?.content?.parts?.[0]?.functionCall;
     }
 
-    const textResponse = candidates?.[0]?.content?.parts?.[0]?.text;
-    return { responseContent: textResponse };
+    const textResponse =
+      response.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+    return { responseContent: textResponse || " " };
   } catch (error) {
-    console.error("Error in handleConversationFlow:", error);
+    console.error("Error in handleAIFunctionWorkflow:", error);
     throw error;
   }
 };
 
-const { downsampleTo16k } = require("./src/utils/audioResampler");
-const { isNonZeroBuffer } = require("./src/utils/isNonZeroBuffer");
-
-const activeCalls = new Map();
-
-const handleWhatsAppVoiceCallServices = async (change, wrtc, handlers) => {
-  const {
-    RTCPeerConnection,
-    RTCSessionDescription,
-    RTCAudioSink,
-    RTCAudioSource,
-  } = wrtc;
-  const {
-    sendPreAccept,
-    sendAccept,
-    createLiveAiSession,
-    handleTurn,
-    AudioStreamer,
-  } = handlers;
-
-  console.log(
-    `👽 WhatsApp Calling Package installation verified — working as expected.`
-  );
-
-  const call = change?.value?.calls?.[0];
-  const phoneNumberId = change?.value?.metadata?.phone_number_id;
-  const callId = call?.id;
-  const senderId = call?.from;
-
-  if (!call || !phoneNumberId || !callId) {
-    console.warn("Invalid webhook payload for call - missing fields.");
-    return;
-  }
-
-  if (call.event === "terminate" && call.status === "COMPLETED") {
-    const callContext = activeCalls.get(callId);
-    if (callContext) {
-      console.log("⛔ Terminate whatsApp call, cleaning up call:", senderId);
-      callContext.cleanup();
-    }
-    return;
-  }
-
-  if (!(call?.session?.sdp && call?.session?.sdp_type === "offer")) {
-    console.log("No SDP offer in webhook. Ignoring.");
-    return;
-  }
-
-  console.log(`📞 Incoming call from ${senderId}, Call ID: ${callId}`);
-
-  const callContext = {
-    phoneNumberId,
-    senderId,
-    callId,
-    pc: null,
-    audioSink: null,
-    audioSource: null,
-    streamer: null,
-    geminiSession: null,
-    responseQueue: [],
-    audioParts: [],
-    welcomeMessageSent: false,
-    audioChunkCount: 0,
-    CHUNKS_BEFORE_RESPONSE: 50,
-    cleanup: null,
-    activeCalls: activeCalls,
-  };
-
-  const cleanup = () => {
-    console.log(`🧹 Cleaning up resources for call: ${callContext.callId}`);
-    try {
-      if (callContext.audioSink) callContext.audioSink.stop();
-    } catch (e) {
-      console.error("Error stopping audioSink:", e.message);
-    }
-    try {
-      if (callContext.pc) callContext.pc.close();
-    } catch (e) {
-      console.error("Error closing peer connection:", e.message);
-    }
-    try {
-      if (callContext.geminiSession) callContext.geminiSession.close();
-    } catch (e) {
-      console.error("Error closing Gemini session:", e.message);
-    }
-    activeCalls.delete(callContext.callId);
-  };
-  callContext.cleanup = cleanup;
-
-  try {
-    callContext.geminiSession = await createLiveAiSession(callContext);
-
-    const iceServers = [
-      { urls: "stun:stun.l.google.com:19302" },
-      {
-        urls: "turn:15.235.209.104:3478",
-        username: "rajesh",
-        credential: "khoksi",
-      },
-    ];
-
-    callContext.pc = new RTCPeerConnection({ iceServers });
-
-    callContext.audioSource = new RTCAudioSource();
-    callContext.streamer = new AudioStreamer(callContext.audioSource);
-    const audioTrack = callContext.audioSource.createTrack();
-    callContext.pc.addTrack(audioTrack);
-    callContext.pc.addTransceiver("audio", { direction: "recvonly" });
-
-    callContext.pc.ontrack = (event) => {
-      try {
-        const [track] = event.streams[0].getAudioTracks();
-        if (!track) return;
-
-        callContext.audioSink = new RTCAudioSink(track);
-
-        callContext.audioSink.ondata = (data) => {
-          try {
-            const downBuffer = downsampleTo16k(data.samples, data.sampleRate);
-
-            if (
-              callContext.pc.iceConnectionState === "completed" &&
-              isNonZeroBuffer(downBuffer)
-            ) {
-              const base64Audio = downBuffer.toString("base64");
-              callContext.geminiSession.sendRealtimeInput({
-                audio: {
-                  mimeType: "audio/pcm",
-                  rate: 16000,
-                  data: base64Audio,
-                },
-              });
-
-              callContext.audioChunkCount++;
-              if (
-                callContext.audioChunkCount %
-                  callContext.CHUNKS_BEFORE_RESPONSE ===
-                0
-              ) {
-                handleTurn(callContext);
-              }
-            }
-          } catch (e) {
-            console.error("Error in audioSink.ondata:", e.message);
-          }
-        };
-
-        callContext.audioSink.onerror = (err) =>
-          console.error("❌ RTCAudioSink error:", err.message);
-      } catch (err) {
-        console.error("Error handling pc.ontrack:", err.message);
-      }
-    };
-
-    callContext.pc.oniceconnectionstatechange = async () => {
-      console.log(
-        `ICE Connection State for ${callContext.callId}: ${callContext.pc.iceConnectionState}`
-      );
-      if (
-        (callContext.pc.iceConnectionState === "connected" ||
-          callContext.pc.iceConnectionState === "completed") &&
-        !callContext.welcomeMessageSent
-      ) {
-        callContext.welcomeMessageSent = true;
-
-        try {
-          await callContext.geminiSession.sendClientContent({
-            turns: [
-              {
-                role: "user",
-                parts: [
-                  {
-                    text: "The WhatsApp voice call has just connected. Please greet the user in your role as AiDOse AI, the official voice assistant for AiDOse.Do not mention Gemini or AI models. Greet warmly and professionally, and ask how you may assist today.",
-                  },
-                ],
-              },
-            ],
-          });
-        } catch (err) {
-          console.error("❌ Error playing welcome message:", err.message);
-        }
-      }
-
-      if (
-        callContext.pc.iceConnectionState === "failed" ||
-        callContext.pc.iceConnectionState === "disconnected" ||
-        callContext.pc.iceConnectionState === "closed"
-      ) {
-        console.log(
-          `⚠️ Peer connection for ${callContext.callId} failed/closed.`
-        );
-        cleanup();
-      }
-    };
-
-    await callContext.pc.setRemoteDescription(
-      new RTCSessionDescription({ type: "offer", sdp: call.session.sdp })
-    );
-    const answer = await callContext.pc.createAnswer();
-    await callContext.pc.setLocalDescription(answer);
-
-    const sdpAnswer = callContext.pc.localDescription.sdp;
-    await sendPreAccept(phoneNumberId, callId, sdpAnswer);
-    await sendAccept(phoneNumberId, callId, sdpAnswer);
-
-    activeCalls.set(callId, callContext);
-  } catch (err) {
-    console.error("❌ Error in main try-catch block:", err.message);
-    cleanup();
-  }
-};
-
-module.exports = { handleAIFunctionWorkflow, handleWhatsAppVoiceCallServices };
+module.exports = { handleAIFunctionWorkflow };
