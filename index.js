@@ -1,5 +1,3 @@
-
-
 const handleAIFunctionWorkflow = async (
   app_id,
   messageText,
@@ -23,7 +21,8 @@ const handleAIFunctionWorkflow = async (
     checkCustomerDataAndSendEmail,
     User,
     getSystemInstruction,
-    getVertexUserSession
+    getVertexUserSession,
+    checkTicketStatus
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -276,13 +275,43 @@ const handleAIFunctionWorkflow = async (
           break;
         }
         case "assignHumanAgent": {
+          console.log(
+            "👨‍💻 Assigning Human Agent with details:",
+            functionCall.args
+          );
+
+          const { orderNumber, reason, customerName, customerPhone } =
+            functionCall.args;
+
           const { responseContent } = await assignHumanAgent(
-            functionCall.args.orderNumber,
+            orderNumber,
             app_id,
             senderId,
-            functionCall.args.reason
+            reason,
+            customerName,
+            customerPhone
           );
           toolResultResponse = { result: responseContent };
+          break;
+        }
+        case "checkTicketStatus": {
+          const { ticketNumber, customerPhone, email } = functionCall.args;
+          console.log(
+            `🎫 Checking Ticket Status: ID=${ticketNumber}, Phone=${customerPhone}`
+          );
+          const statusResult = await checkTicketStatus(
+            ticketNumber,
+            customerPhone,
+            email,
+            app_id
+          );
+
+          // Example response structure expected from backend:
+          // { status: "Open", message: "Your ticket is currently being reviewed by an agent." }
+
+          toolResultResponse = {
+            result: statusResult,
+          };
           break;
         }
 
