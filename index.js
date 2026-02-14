@@ -7,7 +7,7 @@ const handleAIFunctionWorkflow = async (
   providedSecret,
   handlers = {},
   App,
-  Instruction
+  Instruction,
 ) => {
   const {
     getChatSession,
@@ -22,7 +22,7 @@ const handleAIFunctionWorkflow = async (
     User,
     getSystemInstruction,
     getVertexUserSession,
-    checkTicketStatus
+    checkTicketStatus,
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -43,7 +43,7 @@ const handleAIFunctionWorkflow = async (
 
   if (appData?.knowledgeBase?.instructions?.length > 0) {
     const activeAppInstruction = appData.knowledgeBase.instructions.find(
-      (instruction) => instruction.isActive === true
+      (instruction) => instruction.isActive === true,
     );
     if (activeAppInstruction) {
       matchedInstruction = activeAppInstruction;
@@ -55,7 +55,7 @@ const handleAIFunctionWorkflow = async (
     const allGlobalInstructions = await Instruction.find();
     matchedInstruction = allGlobalInstructions.find(
       (instruction) =>
-        instruction.tool === appData.service && instruction.isActive
+        instruction.tool === appData.service && instruction.isActive,
     );
   }
 
@@ -71,7 +71,7 @@ const handleAIFunctionWorkflow = async (
   const finalRobustInstruction = getSystemInstruction(
     domain,
     customInstructionText,
-    companyName
+    companyName,
   );
 
   const chat = getChatSession(app_id, senderId, finalRobustInstruction);
@@ -92,7 +92,7 @@ const handleAIFunctionWorkflow = async (
     while (functionCall && loopCount < MAX_LOOPS) {
       loopCount++;
       console.log(
-        `⚙️ [Loop ${loopCount}] Executing Tool: "${functionCall.name}"`
+        `⚙️ [Loop ${loopCount}] Executing Tool: "${functionCall.name}"`,
       );
 
       let toolResultResponse = {};
@@ -106,7 +106,7 @@ const handleAIFunctionWorkflow = async (
           let instruction = "ACCESS DENIED. Ask for phone number.";
 
           console.log(
-            `🛡️ OTP Check: Enabled=${isOtpServiceEnabled}, Verified=${isVerified}`
+            `🛡️ OTP Check: Enabled=${isOtpServiceEnabled}, Verified=${isVerified}`,
           );
 
           if (!isOtpServiceEnabled) {
@@ -167,7 +167,7 @@ const handleAIFunctionWorkflow = async (
           }
 
           console.log(
-            `🔐 VERIFYING: Input('${inputOtp}') vs Stored('${storedOtp}')`
+            `🔐 VERIFYING: Input('${inputOtp}') vs Stored('${storedOtp}')`,
           );
 
           let isSuccess = false;
@@ -206,7 +206,7 @@ const handleAIFunctionWorkflow = async (
           console.log(`📦 Checking Order: ${orderNumber}`);
           const { responseContent, order } = await checkOrderDetails(
             orderNumber,
-            app_id
+            app_id,
           );
 
           const cleanOrder = order
@@ -229,7 +229,7 @@ const handleAIFunctionWorkflow = async (
           const searchParams = functionCall.args;
           const googleDataFromMongo = await fetchCombinedProductData(
             app_id,
-            searchParams
+            searchParams,
           );
 
           const result = await chat.sendMessage([
@@ -248,12 +248,13 @@ const handleAIFunctionWorkflow = async (
             responseContent:
               result.response.candidates[0]?.content?.parts[0]?.text,
             searchParams,
+            foundProducts: googleDataFromMongo.data,
           };
         }
         case "getKnowledgebaseAnswer": {
           const { response } = await fetchKnowledgeBasedData(
             messageText,
-            app_id
+            app_id,
           );
           toolResultResponse = { results: response };
           break;
@@ -267,7 +268,7 @@ const handleAIFunctionWorkflow = async (
           const newOrder = await createOrder(
             functionCall.args.order_details,
             app_id,
-            senderId
+            senderId,
           );
           toolResultResponse = {
             result: `Order Created: ${newOrder.orderNumber}`,
@@ -277,7 +278,7 @@ const handleAIFunctionWorkflow = async (
         case "assignHumanAgent": {
           console.log(
             "👨‍💻 Assigning Human Agent with details:",
-            functionCall.args
+            functionCall.args,
           );
 
           const { orderNumber, reason, customerName, customerPhone } =
@@ -289,7 +290,7 @@ const handleAIFunctionWorkflow = async (
             senderId,
             reason,
             customerName,
-            customerPhone
+            customerPhone,
           );
           toolResultResponse = { result: responseContent };
           break;
@@ -297,13 +298,13 @@ const handleAIFunctionWorkflow = async (
         case "checkTicketStatus": {
           const { ticketNumber, customerPhone, email } = functionCall.args;
           console.log(
-            `🎫 Checking Ticket Status: ID=${ticketNumber}, Phone=${customerPhone}`
+            `🎫 Checking Ticket Status: ID=${ticketNumber}, Phone=${customerPhone}`,
           );
           const statusResult = await checkTicketStatus(
             ticketNumber,
             customerPhone,
             email,
-            app_id
+            app_id,
           );
 
           // Example response structure expected from backend:
