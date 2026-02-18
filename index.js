@@ -23,6 +23,7 @@ const handleAIFunctionWorkflow = async (
     getSystemInstruction,
     getVertexUserSession,
     checkTicketStatus,
+    updateOrderDataService,
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -232,6 +233,8 @@ const handleAIFunctionWorkflow = async (
             searchParams,
           );
 
+          // console.log("Data fetched:-", googleDataFromMongo.data);
+
           const result = await chat.sendMessage([
             {
               functionResponse: {
@@ -270,6 +273,17 @@ const handleAIFunctionWorkflow = async (
             app_id,
             senderId,
           );
+
+          currentUserState.lastCreatedOrder = {
+            orderNumber: newOrder.orderNumber,
+            createdAt: Date.now(),
+          };
+
+          console.log(
+            "✅ Session Updated with Order:",
+            currentUserState.lastCreatedOrder,
+          );
+
           toolResultResponse = {
             result: `Order Created: ${newOrder.orderNumber}`,
           };
@@ -316,6 +330,95 @@ const handleAIFunctionWorkflow = async (
           break;
         }
 
+        case "updateRecentOrder": {
+          const { productsToAdd, action } = functionCall.args;
+
+          console.log(`♻️ Update Request: ${action}`, productsToAdd);
+
+          const lastOrder = currentUserState.lastCreatedOrder;
+          const ONE_HOUR = 60 * 60 * 1000;
+          const isRecent =
+            lastOrder && Date.now() - lastOrder.createdAt < ONE_HOUR;
+
+          if (isRecent && lastOrder.orderNumber) {
+            console.log(
+              `♻️ Updating Order #${lastOrder.orderNumber} with items:`,
+              productsToAdd,
+            );
+            const searchString = productsToAdd
+              .map((p) => p.productName || "")
+              .join(" ");
+
+            const productData = await fetchCombinedProductData(app_id, {
+              query: searchString,
+            });
+
+            const foundProducts = productData.data || [];
+
+            const enrichedProducts = productsToAdd
+              .map((requestedItem) => {
+                if (!requestedItem.productName) return null;
+
+                const match = foundProducts.find(
+                  (p) =>
+                    p.productName &&
+                    p.productName
+                      .toLowerCase()
+                      .includes(requestedItem.productName.toLowerCase()),
+                );
+
+                if (match) {
+                  return {
+                    productName: match.productName,
+                    cost: match.cost || match.price,
+                    quantity: requestedItem.quantity || 1,
+                    id: match.id,
+                    image: match.image,
+                  };
+                } else {
+                  console.warn(
+                    `⚠️ Product not found in DB or Price missing: ${requestedItem.productName}`,
+                  );
+                  return null;
+                }
+              })
+              .filter((item) => item !== null);
+
+            if (enrichedProducts.length === 0) {
+              toolResultResponse = {
+                error:
+                  "I couldn't verify the products in our database. Please check the product names and try again.",
+              };
+              break;
+            }
+
+            const updateResult = await updateOrderDataService(
+              app_id,
+              lastOrder.orderNumber,
+              { newProducts: enrichedProducts },
+            );
+
+            if (updateResult.success) {
+              const addedItemsList = enrichedProducts
+                .map((p) => p.productName)
+                .join(", ");
+              toolResultResponse = {
+                result: `✅ Successfully updated Order #${lastOrder.orderNumber}. Added: ${addedItemsList}. New Total Cost: ${updateResult.order.totalCost}.`,
+              };
+            } else {
+              toolResultResponse = {
+                error: `❌ Failed to update order: ${updateResult.message}`,
+              };
+            }
+          } else {
+            toolResultResponse = {
+              error:
+                "No active recent order found in this session. Please proceed to create a NEW order using 'submitOrder'.",
+            };
+          }
+          break;
+        }
+
         default:
           console.warn(`⚠️ Unknown Tool: ${functionCall.name}`);
           toolResultResponse = { error: "Unknown tool" };
@@ -336,7 +439,22 @@ const handleAIFunctionWorkflow = async (
 
     const textResponse =
       response.response?.candidates?.[0]?.content?.parts?.[0]?.text;
-    return { responseContent: textResponse || " " };
+
+    const usedTools =
+      response.response?.candidates?.[0]?.content?.parts
+        ?.filter((p) => p.functionCall)
+        ?.map((p) => p.functionCall.name) || [];
+
+    const shouldClearCache = usedTools.some((tool) =>
+      ["submitOrder", "updateRecentOrder", "confirmOrder"].includes(tool),
+    );
+
+    return {
+      responseContent: textResponse || " ",
+      searchParams: undefined,
+      foundProducts: [],
+      shouldClearCache,
+    };
   } catch (error) {
     console.error("Error in handleAIFunctionWorkflow:", error);
     throw error;
