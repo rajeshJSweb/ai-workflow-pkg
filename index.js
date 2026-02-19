@@ -233,8 +233,6 @@ const handleAIFunctionWorkflow = async (
             searchParams,
           );
 
-          // console.log("Data fetched:-", googleDataFromMongo.data);
-
           const result = await chat.sendMessage([
             {
               functionResponse: {
@@ -247,9 +245,24 @@ const handleAIFunctionWorkflow = async (
             },
           ]);
 
+          let responseContent =
+            result.response.candidates[0]?.content?.parts[0]?.text;
+
+          if (
+            !responseContent &&
+            googleDataFromMongo.data &&
+            googleDataFromMongo.data.length > 0
+          ) {
+            console.warn(
+              "⚠️ AI returned empty text after fetchProductData. Using fallback.",
+            );
+            const firstProduct = googleDataFromMongo.data[0];
+            const pName = firstProduct.productName || "Product";
+            const pId = firstProduct.id || "";
+            responseContent = `Here is the ${pName} [[ID:${pId}]]. Would you like to order?`;
+          }
           return {
-            responseContent:
-              result.response.candidates[0]?.content?.parts[0]?.text,
+            responseContent: responseContent,
             searchParams,
             foundProducts: googleDataFromMongo.data,
           };
@@ -333,7 +346,7 @@ const handleAIFunctionWorkflow = async (
         case "updateRecentOrder": {
           const { productsToAdd, action } = functionCall.args;
 
-          console.log(`♻️ Update Request: ${action}`, productsToAdd);
+          // console.log(`♻️ Update Request: ${action}`, productsToAdd);
 
           const lastOrder = currentUserState.lastCreatedOrder;
           const ONE_HOUR = 60 * 60 * 1000;
@@ -341,10 +354,10 @@ const handleAIFunctionWorkflow = async (
             lastOrder && Date.now() - lastOrder.createdAt < ONE_HOUR;
 
           if (isRecent && lastOrder.orderNumber) {
-            console.log(
-              `♻️ Updating Order #${lastOrder.orderNumber} with items:`,
-              productsToAdd,
-            );
+            // console.log(
+            //   `♻️ Updating Order #${lastOrder.orderNumber} with items:`,
+            //   productsToAdd,
+            // );
             const searchString = productsToAdd
               .map((p) => p.productName || "")
               .join(" ");
@@ -363,8 +376,8 @@ const handleAIFunctionWorkflow = async (
                   (p) =>
                     p.productName &&
                     p.productName
-                      .toLowerCase()
-                      .includes(requestedItem.productName.toLowerCase()),
+                      ?.toLowerCase()
+                      ?.includes(requestedItem.productName?.toLowerCase()),
                 );
 
                 if (match) {
@@ -395,7 +408,7 @@ const handleAIFunctionWorkflow = async (
             const updateResult = await updateOrderDataService(
               app_id,
               lastOrder.orderNumber,
-              { newProducts: enrichedProducts },
+              { newProducts: enrichedProducts, action },
             );
 
             if (updateResult.success) {
@@ -440,20 +453,12 @@ const handleAIFunctionWorkflow = async (
     const textResponse =
       response.response?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    const usedTools =
-      response.response?.candidates?.[0]?.content?.parts
-        ?.filter((p) => p.functionCall)
-        ?.map((p) => p.functionCall.name) || [];
-
-    const shouldClearCache = usedTools.some((tool) =>
-      ["submitOrder", "updateRecentOrder", "confirmOrder"].includes(tool),
-    );
+    console.log("❇️ Initialy generated response:", textResponse);
 
     return {
       responseContent: textResponse || " ",
       searchParams: undefined,
       foundProducts: [],
-      shouldClearCache,
     };
   } catch (error) {
     console.error("Error in handleAIFunctionWorkflow:", error);
