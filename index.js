@@ -268,10 +268,27 @@ const handleAIFunctionWorkflow = async (
           };
         }
         case "getKnowledgebaseAnswer": {
+          const {
+            translated_question_english,
+            original_question_language,
+            detected_language,
+          } = functionCall.args;
+
+          console.log(`📖 Knowledgebase Search Request:`);
+          console.log(
+            `   - English Keywords (for DB search): "${translated_question_english}"`,
+          );
+          if (original_question_language) {
+            console.log(
+              `   - Original User Query: "${original_question_language}" (${detected_language || "unknown language"})`,
+            );
+          }
+
           const { response } = await fetchKnowledgeBasedData(
-            messageText,
+            translated_question_english,
             app_id,
           );
+          
           toolResultResponse = { results: response };
           break;
         }
