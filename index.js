@@ -288,12 +288,33 @@ const handleAIFunctionWorkflow = async (
             translated_question_english,
             app_id,
           );
-          
+
           toolResultResponse = { results: response };
           break;
         }
         case "getFAQAnswer": {
-          const { response } = await getFAQAnswer(messageText, app_id);
+          const {
+            translated_question_english,
+            original_question_language,
+            detected_language,
+          } = functionCall.args;
+
+          console.log(`💬 FAQ Search Request:`);
+          console.log(
+            `   - English Keywords (for DB search): "${translated_question_english}"`,
+          );
+          if (original_question_language) {
+            console.log(
+              `   - Original User Query: "${original_question_language}" (${detected_language || "unknown language"})`,
+            );
+          }
+
+          // Pass the translated English text instead of the raw messageText
+          const { response } = await fetchKnowledgeBasedData(
+            translated_question_english,
+            app_id,
+          );
+
           toolResultResponse = { results: response };
           break;
         }
