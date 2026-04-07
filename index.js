@@ -24,6 +24,7 @@ const handleAIFunctionWorkflow = async (
     getVertexUserSession,
     checkTicketStatus,
     updateOrderDataService,
+    syncOrderToCustomer
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -323,7 +324,15 @@ const handleAIFunctionWorkflow = async (
             functionCall.args.order_details,
             app_id,
             senderId,
+            from,
           );
+
+          await syncOrderToCustomer({
+            ...functionCall.args.order_details,
+            _id: newOrder._id,
+            senderId,
+            from,
+          });
 
           currentUserState.lastCreatedOrder = {
             orderNumber: newOrder.orderNumber,
