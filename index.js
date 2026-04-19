@@ -275,7 +275,6 @@ const handleAIFunctionWorkflow = async (
                 messageText,
                 app_id,
               );
-              console.log(response);
               toolResultResponse = { results: response };
               break;
             }
