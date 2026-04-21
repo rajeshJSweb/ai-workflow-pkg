@@ -24,7 +24,7 @@ const handleAIFunctionWorkflow = async (
     getVertexUserSession,
     checkTicketStatus,
     updateOrderDataService,
-    syncOrderToCustomer
+    syncOrderToCustomer,
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -76,7 +76,11 @@ const handleAIFunctionWorkflow = async (
     companyName,
   );
 
-  const chat = initializeGeminiTextModel(app_id, senderId, finalRobustInstruction);
+  const chat = initializeGeminiTextModel(
+    app_id,
+    senderId,
+    finalRobustInstruction,
+  );
   const currentUserState = getVertexUserSession(senderId);
 
   if (chat?.historyInternal) {
@@ -271,8 +275,10 @@ const handleAIFunctionWorkflow = async (
             }
 
             case "getKnowledgebaseAnswer": {
+              const searchParams = functionCall.args;
+              console.log(functionCall.args);
               const { response } = await fetchKnowledgeBasedData(
-                messageText,
+                searchParams,
                 app_id,
               );
               toolResultResponse = { results: response };
@@ -280,7 +286,9 @@ const handleAIFunctionWorkflow = async (
             }
 
             case "getFAQAnswer": {
-              const { response } = await getFAQAnswer(messageText, app_id);
+              const searchParams = functionCall.args;
+              console.log(functionCall.args);
+              const { response } = await getFAQAnswer(searchParams, app_id);
               toolResultResponse = { results: response };
               break;
             }
@@ -468,8 +476,9 @@ const handleAIFunctionWorkflow = async (
     }
 
     const textResponse =
-      response.response?.candidates?.[0]?.content?.parts?.find((p) => p.text)
-        ?.text;
+      response.response?.candidates?.[0]?.content?.parts?.find(
+        (p) => p.text,
+      )?.text;
 
     const usedTools =
       response.response?.candidates?.[0]?.content?.parts
