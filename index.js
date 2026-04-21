@@ -10,7 +10,7 @@ const handleAIFunctionWorkflow = async (
   Instruction,
 ) => {
   const {
-    getChatSession,
+    initializeGeminiTextModel,
     createTransaction,
     checkOrderDetails,
     fetchKnowledgeBasedData,
@@ -76,7 +76,7 @@ const handleAIFunctionWorkflow = async (
     companyName,
   );
 
-  const chat = getChatSession(app_id, senderId, finalRobustInstruction);
+  const chat = initializeGeminiTextModel(app_id, senderId, finalRobustInstruction);
   const currentUserState = getVertexUserSession(senderId);
 
   if (chat?.historyInternal) {
