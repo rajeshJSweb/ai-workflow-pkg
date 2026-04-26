@@ -20,11 +20,18 @@ const handleAIFunctionWorkflow = async (
     fetchCombinedProductData,
     checkCustomerDataAndSendEmail,
     User,
-    getSystemInstruction,
+    system_instruction_for_gemini_3,
     getVertexUserSession,
-    checkTicketStatus,
     updateOrderDataService,
     syncOrderToCustomer,
+    buildCustomerContextSummary,
+    restoreSessionFromDB,
+    buildContextSummary,
+    getCustomerByPlatformId,
+    getRecentOrderByUser,
+    getRecentConversationMessages,
+    saveVertexUserSession,
+    sendMessageWithRetry,
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -70,32 +77,151 @@ const handleAIFunctionWorkflow = async (
   const domain = currentDomain.toUpperCase();
   const companyName = appData?.company || "Our Service";
 
-  const finalRobustInstruction = getSystemInstruction(
+  const finalRobustInstruction = system_instruction_for_gemini_3(
     domain,
     customInstructionText,
     companyName,
   );
 
-  const chat = initializeGeminiTextModel(
+  // ─────────────────────────────────────────────────────────────────────────
+  // STEP 1: Session restore
+  // ─────────────────────────────────────────────────────────────────────────
+  let currentUserState;
+  if (
+    typeof restoreSessionFromDB === "function" &&
+    typeof getRecentOrderByUser === "function"
+  ) {
+    currentUserState = await restoreSessionFromDB(
+      senderId,
+      getRecentOrderByUser,
+      app_id,
+    );
+  } else {
+    currentUserState = await getVertexUserSession(senderId, app_id);
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+  // STEP 2: Customer profile fetch
+  // ─────────────────────────────────────────────────────────────────────────
+  let customerProfile = null;
+  if (typeof getCustomerByPlatformId === "function") {
+    try {
+      customerProfile = await getCustomerByPlatformId(senderId, app_id);
+    } catch (e) {
+      console.warn(`Customer profile fetch failed for ${senderId}:`, e.message);
+    }
+  }
+
+  const chat = await initializeGeminiTextModel(
     app_id,
     senderId,
     finalRobustInstruction,
   );
-  const currentUserState = getVertexUserSession(senderId);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // STEP 3: Recent conversation messages fetch
+  // Human agent detection
+  // ─────────────────────────────────────────────────────────────────────────
+  let recentMessages = [];
+  if (typeof getRecentConversationMessages === "function") {
+    try {
+      const conversationDocs = await getRecentConversationMessages(
+        senderId,
+        app_id,
+      );
+      const latestDoc = Array.isArray(conversationDocs)
+        ? conversationDocs[0]
+        : null;
+      if (latestDoc && Array.isArray(latestDoc.messages)) {
+        const allMessages = latestDoc.messages.filter(
+          (m) => m.text && m.text.trim().length > 0,
+        );
+        const agentMessages = allMessages.filter(
+          (m) => m.sender === "assistant" && m.assistantInfo?.name,
+        );
+
+        const regularMessages = allMessages.slice(-20);
+
+        const agentMids = new Set(regularMessages.map((m) => String(m.id)));
+        const missedAgentMsgs = agentMessages
+          .filter((m) => !agentMids.has(String(m.id)))
+          .slice(-3);
+
+        recentMessages = [...missedAgentMsgs, ...regularMessages];
+      }
+    } catch (e) {
+      console.warn("Could not fetch recent conversation messages:", e.message);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // STEP 4: Context summary build
+  // ─────────────────────────────────────────────────────────────────────────
+  let contextSummary = "";
+
+  if (typeof buildCustomerContextSummary === "function") {
+    contextSummary = buildCustomerContextSummary(
+      currentUserState,
+      customerProfile,
+      recentMessages,
+      from,
+    );
+  } else if (typeof buildContextSummary === "function") {
+    contextSummary = buildContextSummary(currentUserState, recentMessages);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // STEP 5: Context injection into historyInternal
+  // ─────────────────────────────────────────────────────────────────────────
+  if (contextSummary && chat?.historyInternal) {
+    const alreadyInjected = chat.historyInternal.some(
+      (entry) =>
+        entry.role === "model" &&
+        entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
+    );
+
+    if (!alreadyInjected) {
+      chat.historyInternal.unshift({
+        role: "model",
+        parts: [{ text: contextSummary }],
+      });
+      chat.historyInternal.unshift({
+        role: "user",
+        parts: [{ text: "[context-restore]" }],
+      });
+      console.log(`Context injected for: ${senderId}`);
+    } else {
+      const modelEntryIndex = chat.historyInternal.findIndex(
+        (entry) =>
+          entry.role === "model" &&
+          entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
+      );
+      if (modelEntryIndex !== -1) {
+        chat.historyInternal[modelEntryIndex].parts[0].text = contextSummary;
+      }
+    }
+  }
 
   if (chat?.historyInternal) {
     chat.historyInternal.push({ role: "user", parts: [{ text: messageText }] });
   }
 
   try {
-    let response = await chat.sendMessage(messageText);
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalTokens = 0;
+
+    // let response = await chat.sendMessage(messageText);
+    let response = await sendMessageWithRetry(chat, messageText);
+
+    const usage = response.response.usageMetadata;
+    if (usage) {
+      totalInputTokens += usage.promptTokenCount || 0;
+      totalOutputTokens += usage.candidatesTokenCount || 0;
+      totalTokens += usage.totalTokenCount || 0;
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Extract ALL function call parts from the response (not just parts[0]).
-    // Vertex AI can return multiple function calls in a single turn when the
-    // model decides to call the same (or different) tools in parallel.
-    // We MUST respond with exactly as many functionResponse parts as there
-    // were functionCall parts — otherwise Vertex AI throws a 400 error.
     // ─────────────────────────────────────────────────────────────────────────
     let allParts = response.response?.candidates?.[0]?.content?.parts || [];
     let functionCalls = allParts.filter((p) => p.functionCall);
@@ -106,14 +232,7 @@ const handleAIFunctionWorkflow = async (
 
     while (functionCalls.length > 0 && loopCount < MAX_LOOPS) {
       loopCount++;
-      console.log(
-        `⚙️ [Loop ${loopCount}] Executing ${functionCalls.length} tool call(s): ${functionCalls.map((p) => p.functionCall.name).join(", ")}`,
-      );
 
-      // -----------------------------------------------------------------------
-      // Execute ALL function calls in parallel, then collect all their results.
-      // Each result is wrapped as a functionResponse part with the matching name.
-      // -----------------------------------------------------------------------
       const toolResponseParts = await Promise.all(
         functionCalls.map(async ({ functionCall }) => {
           let toolResultResponse = {};
@@ -252,6 +371,7 @@ const handleAIFunctionWorkflow = async (
                 `🔍 fetchProductData: product_name="${searchParams.product_name}"`,
                 searchParams,
               );
+              console.log(functionCall.args);
               const googleDataFromMongo = await fetchCombinedProductData(
                 app_id,
                 searchParams,
@@ -293,37 +413,6 @@ const handleAIFunctionWorkflow = async (
               break;
             }
 
-            case "submitOrder": {
-              const newOrder = await createOrder(
-                functionCall.args.order_details,
-                app_id,
-                senderId,
-                from,
-              );
-
-              await syncOrderToCustomer({
-                ...functionCall.args.order_details,
-                _id: newOrder._id,
-                senderId,
-                from,
-              });
-
-              currentUserState.lastCreatedOrder = {
-                orderNumber: newOrder.orderNumber,
-                createdAt: Date.now(),
-              };
-
-              console.log(
-                "✅ Session Updated with Order:",
-                currentUserState.lastCreatedOrder,
-              );
-
-              toolResultResponse = {
-                result: `Order Created: ${newOrder.orderNumber}`,
-              };
-              break;
-            }
-
             case "assignHumanAgent": {
               console.log(
                 "👨‍💻 Assigning Human Agent with details:",
@@ -360,79 +449,130 @@ const handleAIFunctionWorkflow = async (
               break;
             }
 
+            case "submitOrder": {
+              const newOrder = await createOrder(
+                functionCall.args.order_details,
+                app_id,
+                senderId,
+                from,
+              );
+
+              await syncOrderToCustomer({
+                ...functionCall.args.order_details,
+                _id: newOrder._id,
+                senderId,
+                from,
+              });
+
+              currentUserState.lastCreatedOrder = {
+                orderNumber: newOrder.orderNumber,
+                createdAt: Date.now(),
+              };
+
+              console.log(
+                "✅ Session Updated with Order:",
+                currentUserState.lastCreatedOrder,
+              );
+
+              if (typeof saveVertexUserSession === "function") {
+                await saveVertexUserSession(senderId, app_id, currentUserState);
+              }
+              toolResultResponse = {
+                result: `Order Created: ${newOrder.orderNumber}`,
+              };
+              break;
+            }
+
             case "updateRecentOrder": {
               const { productsToAdd, action } = functionCall.args;
               console.log(`♻️ Update Request: ${action}`, productsToAdd);
+              let orderNumberToUpdate = null;
 
-              const lastOrder = currentUserState.lastCreatedOrder;
-              const ONE_HOUR = 60 * 60 * 1000;
-              const isRecent =
-                lastOrder && Date.now() - lastOrder.createdAt < ONE_HOUR;
+              if (
+                customerProfile &&
+                Array.isArray(customerProfile.purchaseHistory)
+              ) {
+                const recentPendingOrder = customerProfile.purchaseHistory
+                  .filter((o) => o.status === "Pending")
+                  .sort(
+                    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+                  )[0];
+                orderNumberToUpdate = recentPendingOrder?.orderNumber || null;
+              }
 
-              if (isRecent && lastOrder.orderNumber) {
-                console.log(
-                  `♻️ Updating Order #${lastOrder.orderNumber} with items:`,
-                  productsToAdd,
-                );
-                const searchString = productsToAdd
-                  .map((p) => p.productName || "")
-                  .join(" ");
+              const searchString = productsToAdd
+                .map((p) => p.productName || "")
+                .join(" ");
 
-                const productData = await fetchCombinedProductData(app_id, {
-                  query: searchString,
-                });
+              const productData = await fetchCombinedProductData(app_id, {
+                query: searchString,
+              });
+              const foundProducts = productData.data || [];
 
-                const foundProducts = productData.data || [];
+              const enrichedProducts = productsToAdd
+                .map((requestedItem) => {
+                  if (!requestedItem.productName && !requestedItem.productId)
+                    return null;
 
-                const enrichedProducts = productsToAdd
-                  .map((requestedItem) => {
-                    if (!requestedItem.productName) return null;
+                  let match = null;
 
-                    const match = foundProducts.find(
-                      (p) =>
-                        p.productName &&
-                        p.productName
-                          .toLowerCase()
-                          .includes(requestedItem.productName.toLowerCase()),
+                  if (requestedItem.productId) {
+                    match = foundProducts.find(
+                      (p) => p.id === requestedItem.productId,
                     );
+                  }
 
-                    if (match) {
-                      return {
-                        productName: match.productName,
-                        cost: match.cost || match.price,
-                        quantity: requestedItem.quantity || 1,
-                        id: match.id,
-                        image: match.image,
-                      };
-                    } else {
-                      console.warn(
-                        `⚠️ Product not found in DB or Price missing: ${requestedItem.productName}`,
-                      );
-                      return null;
-                    }
-                  })
-                  .filter((item) => item !== null);
+                  if (!match && requestedItem.productName) {
+                    match = foundProducts.find((p) => {
+                      const dbName =
+                        p.productName === "Unknown Product" || !p.productName
+                          ? p._original?.name ||
+                            p._original?.productName ||
+                            p.name ||
+                            ""
+                          : p.productName;
 
-                if (enrichedProducts.length === 0) {
-                  toolResultResponse = {
-                    error:
-                      "I couldn't verify the products in our database. Please check the product names and try again.",
+                      return dbName
+                        .toLowerCase()
+                        .includes(requestedItem.productName.toLowerCase());
+                    });
+                  }
+
+                  if (!match) return null;
+
+                  const resolvedName =
+                    match.productName === "Unknown Product" ||
+                    !match.productName
+                      ? requestedItem.productName
+                      : match.productName;
+
+                  return {
+                    productName: resolvedName,
+                    cost: Number(match.cost || match.price),
+                    quantity: requestedItem.quantity || 1,
+                    id: match.id,
+                    image: match.image,
                   };
-                  break;
-                }
+                })
+                .filter((item) => item !== null);
 
+              if (enrichedProducts.length === 0) {
+                toolResultResponse = {
+                  error: "I couldn't verify the products in our database.",
+                };
+                break;
+              }
+
+              if (orderNumberToUpdate) {
                 const updateResult = await updateOrderDataService(
                   app_id,
-                  lastOrder.orderNumber,
-                  { newProducts: enrichedProducts },
+                  orderNumberToUpdate,
+                  { newProducts: enrichedProducts, action: action },
                 );
 
                 if (updateResult.success) {
-                  const addedItemsList = enrichedProducts
-                    .map((p) => p.productName)
-                    .join(", ");
                   toolResultResponse = {
-                    result: `✅ Successfully updated Order #${lastOrder.orderNumber}. Added: ${addedItemsList}. New Total Cost: ${updateResult.order.totalCost}.`,
+                    result: `✅ Order #${orderNumberToUpdate} updated successfully. New Total Cost: ${updateResult.order.totalCost}.`,
                   };
                 } else {
                   toolResultResponse = {
@@ -440,9 +580,39 @@ const handleAIFunctionWorkflow = async (
                   };
                 }
               } else {
+                console.log(
+                  `🆕 No recent pending order found. Creating new order...`,
+                );
+
+                const orderDetails = {
+                  name: customerProfile?.name || "Customer",
+                  phone: customerProfile?.phone || "",
+                  address:
+                    customerProfile?.addresses?.[0]?.addressLine ||
+                    "Address not specified",
+                  products: enrichedProducts.map((p) => ({
+                    product_name: p.productName,
+                    price: p.cost,
+                    quantity: p.quantity,
+                  })),
+                  deliveryCost: null,
+                  discount_amount: 0,
+                };
+
+                const newOrder = await createOrder(
+                  orderDetails,
+                  app_id,
+                  senderId,
+                  from,
+                );
+
+                currentUserState.lastCreatedOrder = {
+                  orderNumber: newOrder.orderNumber,
+                  createdAt: Date.now(),
+                };
+
                 toolResultResponse = {
-                  error:
-                    "No active recent order found in this session. Please proceed to create a NEW order using 'submitOrder'.",
+                  result: `✅ No pending order found. Created new order: ${newOrder.orderNumber}.`,
                 };
               }
               break;
@@ -471,6 +641,13 @@ const handleAIFunctionWorkflow = async (
       // -----------------------------------------------------------------------
       response = await chat.sendMessage(toolResponseParts);
 
+      const loopUsage = response.response.usageMetadata;
+      if (loopUsage) {
+        totalInputTokens += loopUsage.promptTokenCount || 0;
+        totalOutputTokens += loopUsage.candidatesTokenCount || 0;
+        totalTokens += loopUsage.totalTokenCount || 0;
+      }
+
       allParts = response.response?.candidates?.[0]?.content?.parts || [];
       functionCalls = allParts.filter((p) => p.functionCall);
     }
@@ -494,10 +671,22 @@ const handleAIFunctionWorkflow = async (
       searchParams: undefined,
       foundProducts: productResult,
       shouldClearCache,
+      usage: {
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        totalTokens: totalTokens,
+      },
     };
   } catch (error) {
-    console.error("❌ Error in handleAIFunctionWorkflow:", error.message);
-    throw error;
+    console.error(
+      "❌ Vertex AI Error:",
+      error.message || "Unknown error occurred",
+    );
+    return {
+      responseContent: null,
+      shouldClearCache: false,
+      errorType: "AI_TIMEOUT",
+    };
   }
 };
 
