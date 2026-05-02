@@ -1,3 +1,5 @@
+const { fetchProductsByIds } = require("../utiles/fetchProductsByIds");
+
 const handleAIFunctionWorkflow = async (
   app_id,
   messageText,
@@ -5,9 +7,10 @@ const handleAIFunctionWorkflow = async (
   senderId,
   sessionId,
   providedSecret,
-  handlers = {},
   App,
   Instruction,
+  User,
+  handlers = {},
 ) => {
   const {
     initializeGeminiTextModel,
@@ -19,8 +22,8 @@ const handleAIFunctionWorkflow = async (
     getFAQAnswer,
     fetchCombinedProductData,
     checkCustomerDataAndSendEmail,
-    User,
-    system_instruction_for_gemini_3,
+    coreSystemInstructionNoneEcommerce,
+    geminiSystemInstruction,
     getVertexUserSession,
     updateOrderDataService,
     syncOrderToCustomer,
@@ -77,11 +80,23 @@ const handleAIFunctionWorkflow = async (
   const domain = currentDomain.toUpperCase();
   const companyName = appData?.company || "Our Service";
 
-  const finalRobustInstruction = system_instruction_for_gemini_3(
-    domain,
-    customInstructionText,
-    companyName,
-  );
+  let finalRobustInstruction;
+
+  if (appData?.service === "ecommerce") {
+    finalRobustInstruction = geminiSystemInstruction(
+      domain,
+      customInstructionText,
+      companyName,
+    );
+  } else {
+    finalRobustInstruction = coreSystemInstructionNoneEcommerce(
+      domain,
+      customInstructionText,
+      companyName,
+      null,
+      null,
+    );
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // STEP 1: Session restore
@@ -172,37 +187,72 @@ const handleAIFunctionWorkflow = async (
   // ─────────────────────────────────────────────────────────────────────────
   // STEP 5: Context injection into historyInternal
   // ─────────────────────────────────────────────────────────────────────────
-  if (contextSummary && chat?.historyInternal) {
-    const alreadyInjected = chat.historyInternal.some(
+  // if (contextSummary && chat?.historyInternal) {
+  //   const alreadyInjected = chat.historyInternal.some(
+  //     (entry) =>
+  //       entry.role === "model" &&
+  //       entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
+  //   );
+
+  //   if (!alreadyInjected) {
+  //     chat.historyInternal.unshift({
+  //       role: "model",
+  //       parts: [{ text: contextSummary }],
+  //     });
+  //     chat.historyInternal.unshift({
+  //       role: "user",
+  //       parts: [{ text: "[context-restore]" }],
+  //     });
+  //     console.log(`Context injected for: ${senderId}`);
+  //   } else {
+  //     const modelEntryIndex = chat.historyInternal.findIndex(
+  //       (entry) =>
+  //         entry.role === "model" &&
+  //         entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
+  //     );
+  //     if (modelEntryIndex !== -1) {
+  //       chat.historyInternal[modelEntryIndex].parts[0].text = contextSummary;
+  //     }
+  //   }
+  // }
+
+  // if (chat?.historyInternal) {
+  //   chat.historyInternal.push({ role: "user", parts: [{ text: messageText }] });
+  // }
+
+  if (contextSummary && chat?._history) {
+    const alreadyInjected = chat._history.some(
       (entry) =>
         entry.role === "model" &&
         entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
     );
 
     if (!alreadyInjected) {
-      chat.historyInternal.unshift({
+      chat._history.unshift({
         role: "model",
         parts: [{ text: contextSummary }],
       });
-      chat.historyInternal.unshift({
+      chat._history.unshift({
         role: "user",
         parts: [{ text: "[context-restore]" }],
       });
-      console.log(`Context injected for: ${senderId}`);
+      // console.log(`📍 Context injected for: ${senderId}`);
     } else {
-      const modelEntryIndex = chat.historyInternal.findIndex(
+      const modelEntryIndex = chat._history.findIndex(
         (entry) =>
           entry.role === "model" &&
           entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
       );
       if (modelEntryIndex !== -1) {
-        chat.historyInternal[modelEntryIndex].parts[0].text = contextSummary;
+        chat._history[modelEntryIndex].parts[0].text = contextSummary;
       }
+      // console.log(`☢️ Used context injected for: ${senderId}`);
     }
   }
 
-  if (chat?.historyInternal) {
-    chat.historyInternal.push({ role: "user", parts: [{ text: messageText }] });
+  // message push
+  if (chat?._history) {
+    chat._history.push({ role: "user", parts: [{ text: messageText }] });
   }
 
   try {
@@ -486,8 +536,8 @@ const handleAIFunctionWorkflow = async (
             case "updateRecentOrder": {
               const { productsToAdd, action } = functionCall.args;
               console.log(`♻️ Update Request: ${action}`, productsToAdd);
-              let orderNumberToUpdate = null;
 
+              let orderNumberToUpdate = null;
               if (
                 customerProfile &&
                 Array.isArray(customerProfile.purchaseHistory)
@@ -500,14 +550,75 @@ const handleAIFunctionWorkflow = async (
                 orderNumberToUpdate = recentPendingOrder?.orderNumber || null;
               }
 
-              const searchString = productsToAdd
-                .map((p) => p.productName || "")
-                .join(" ");
+              // ─── Remove: DB lookup ───────────────────────────
+              if (action === "remove") {
+                const removeProducts = productsToAdd.map((p) => ({
+                  productName: p.productName,
+                  quantity: p.quantity || 1,
+                }));
 
-              const productData = await fetchCombinedProductData(app_id, {
-                query: searchString,
-              });
-              const foundProducts = productData.data || [];
+                if (!orderNumberToUpdate) {
+                  toolResultResponse = {
+                    error: "No pending order found to update.",
+                  };
+                  break;
+                }
+
+                const updateResult = await updateOrderDataService(
+                  app_id,
+                  orderNumberToUpdate,
+                  {
+                    newProducts: removeProducts,
+                    action: "remove",
+                  },
+                );
+
+                toolResultResponse = updateResult.success
+                  ? {
+                      result: `✅ Order #${orderNumberToUpdate} updated. Total: ${updateResult.order.totalCost}.`,
+                    }
+                  : { error: `❌ ${updateResult.message}` };
+                break;
+              }
+
+              const idsFromAI = productsToAdd
+                .map((p) => p.productId)
+                .filter(Boolean);
+
+              let foundProducts = [];
+
+              if (idsFromAI.length > 0) {
+                console.log(`🔑 Fetching by IDs:`, idsFromAI);
+                const result = await fetchProductsByIds(app_id, idsFromAI);
+                foundProducts = result.data || [];
+
+                const missingItems = productsToAdd.filter(
+                  (p) =>
+                    p.productId &&
+                    !foundProducts.find((f) => f.id === p.productId),
+                );
+                if (missingItems.length > 0) {
+                  const fallbackQuery = missingItems
+                    .map((p) => p.productName || "")
+                    .join(" ");
+                  const fallbackResult = await fetchCombinedProductData(
+                    app_id,
+                    { query: fallbackQuery },
+                  );
+                  foundProducts = [
+                    ...foundProducts,
+                    ...(fallbackResult.data || []),
+                  ];
+                }
+              } else {
+                const searchString = productsToAdd
+                  .map((p) => p.productName || "")
+                  .join(" ");
+                const result = await fetchCombinedProductData(app_id, {
+                  query: searchString,
+                });
+                foundProducts = result.data || [];
+              }
 
               const enrichedProducts = productsToAdd
                 .map((requestedItem) => {
@@ -521,7 +632,6 @@ const handleAIFunctionWorkflow = async (
                       (p) => p.id === requestedItem.productId,
                     );
                   }
-
                   if (!match && requestedItem.productName) {
                     match = foundProducts.find((p) => {
                       const dbName =
@@ -531,7 +641,6 @@ const handleAIFunctionWorkflow = async (
                             p.name ||
                             ""
                           : p.productName;
-
                       return dbName
                         .toLowerCase()
                         .includes(requestedItem.productName.toLowerCase());
@@ -554,11 +663,11 @@ const handleAIFunctionWorkflow = async (
                     image: match.image,
                   };
                 })
-                .filter((item) => item !== null);
+                .filter(Boolean);
 
               if (enrichedProducts.length === 0) {
                 toolResultResponse = {
-                  error: "I couldn't verify the products in our database.",
+                  error: "Couldn't verify products in database.",
                 };
                 break;
               }
@@ -567,23 +676,17 @@ const handleAIFunctionWorkflow = async (
                 const updateResult = await updateOrderDataService(
                   app_id,
                   orderNumberToUpdate,
-                  { newProducts: enrichedProducts, action: action },
+                  {
+                    newProducts: enrichedProducts,
+                    action,
+                  },
                 );
-
-                if (updateResult.success) {
-                  toolResultResponse = {
-                    result: `✅ Order #${orderNumberToUpdate} updated successfully. New Total Cost: ${updateResult.order.totalCost}.`,
-                  };
-                } else {
-                  toolResultResponse = {
-                    error: `❌ Failed to update order: ${updateResult.message}`,
-                  };
-                }
+                toolResultResponse = updateResult.success
+                  ? {
+                      result: `✅ Order #${orderNumberToUpdate} updated. Total: ${updateResult.order.totalCost}.`,
+                    }
+                  : { error: `❌ ${updateResult.message}` };
               } else {
-                console.log(
-                  `🆕 No recent pending order found. Creating new order...`,
-                );
-
                 const orderDetails = {
                   name: customerProfile?.name || "Customer",
                   phone: customerProfile?.phone || "",
@@ -598,21 +701,18 @@ const handleAIFunctionWorkflow = async (
                   deliveryCost: null,
                   discount_amount: 0,
                 };
-
                 const newOrder = await createOrder(
                   orderDetails,
                   app_id,
                   senderId,
                   from,
                 );
-
                 currentUserState.lastCreatedOrder = {
                   orderNumber: newOrder.orderNumber,
                   createdAt: Date.now(),
                 };
-
                 toolResultResponse = {
-                  result: `✅ No pending order found. Created new order: ${newOrder.orderNumber}.`,
+                  result: `✅ Created new order: ${newOrder.orderNumber}.`,
                 };
               }
               break;
@@ -678,10 +778,7 @@ const handleAIFunctionWorkflow = async (
       },
     };
   } catch (error) {
-    console.error(
-      "❌ Vertex AI Error:",
-      error.message || "Unknown error occurred",
-    );
+    console.error("❌ AI Error:", error.message || "Unknown error occurred");
     return {
       responseContent: null,
       shouldClearCache: false,
