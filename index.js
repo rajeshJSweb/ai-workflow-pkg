@@ -1,4 +1,3 @@
-const { fetchProductsByIds } = require("../utiles/fetchProductsByIds");
 
 const handleAIFunctionWorkflow = async (
   app_id,
@@ -35,6 +34,7 @@ const handleAIFunctionWorkflow = async (
     getRecentConversationMessages,
     saveVertexUserSession,
     sendMessageWithRetry,
+    fetchProductsByIds,
   } = handlers;
 
   const appData = await App.findOne({ app_id });
