@@ -12,7 +12,7 @@ const handleAIFunctionWorkflow = async (
   handlers = {},
 ) => {
   const {
-    initializeGeminiTextModel,
+    initializeVertexTextModel,
     createTransaction,
     checkOrderDetails,
     fetchKnowledgeBasedData,
@@ -126,7 +126,7 @@ const handleAIFunctionWorkflow = async (
     }
   }
 
-  const chat = await initializeGeminiTextModel(
+  const chat = await initializeVertexTextModel(
     app_id,
     senderId,
     finalRobustInstruction,
