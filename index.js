@@ -1,4 +1,3 @@
-
 const handleAIFunctionWorkflow = async (
   app_id,
   messageText,
@@ -187,73 +186,73 @@ const handleAIFunctionWorkflow = async (
   // ─────────────────────────────────────────────────────────────────────────
   // STEP 5: Context injection into historyInternal
   // ─────────────────────────────────────────────────────────────────────────
-  // if (contextSummary && chat?.historyInternal) {
-  //   const alreadyInjected = chat.historyInternal.some(
-  //     (entry) =>
-  //       entry.role === "model" &&
-  //       entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
-  //   );
-
-  //   if (!alreadyInjected) {
-  //     chat.historyInternal.unshift({
-  //       role: "model",
-  //       parts: [{ text: contextSummary }],
-  //     });
-  //     chat.historyInternal.unshift({
-  //       role: "user",
-  //       parts: [{ text: "[context-restore]" }],
-  //     });
-  //     console.log(`Context injected for: ${senderId}`);
-  //   } else {
-  //     const modelEntryIndex = chat.historyInternal.findIndex(
-  //       (entry) =>
-  //         entry.role === "model" &&
-  //         entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
-  //     );
-  //     if (modelEntryIndex !== -1) {
-  //       chat.historyInternal[modelEntryIndex].parts[0].text = contextSummary;
-  //     }
-  //   }
-  // }
-
-  // if (chat?.historyInternal) {
-  //   chat.historyInternal.push({ role: "user", parts: [{ text: messageText }] });
-  // }
-
-  if (contextSummary && chat?._history) {
-    const alreadyInjected = chat._history.some(
+  if (contextSummary && chat?.historyInternal) {
+    const alreadyInjected = chat.historyInternal.some(
       (entry) =>
         entry.role === "model" &&
         entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
     );
 
     if (!alreadyInjected) {
-      chat._history.unshift({
+      chat.historyInternal.unshift({
         role: "model",
         parts: [{ text: contextSummary }],
       });
-      chat._history.unshift({
+      chat.historyInternal.unshift({
         role: "user",
         parts: [{ text: "[context-restore]" }],
       });
-      // console.log(`📍 Context injected for: ${senderId}`);
+      console.log(`Context injected for: ${senderId}`);
     } else {
-      const modelEntryIndex = chat._history.findIndex(
+      const modelEntryIndex = chat.historyInternal.findIndex(
         (entry) =>
           entry.role === "model" &&
           entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
       );
       if (modelEntryIndex !== -1) {
-        chat._history[modelEntryIndex].parts[0].text = contextSummary;
+        chat.historyInternal[modelEntryIndex].parts[0].text = contextSummary;
       }
-      // console.log(`☢️ Used context injected for: ${senderId}`);
     }
   }
 
-  // message push
-  if (chat?._history) {
-    chat._history.push({ role: "user", parts: [{ text: messageText }] });
+  if (chat?.historyInternal) {
+    chat.historyInternal.push({ role: "user", parts: [{ text: messageText }] });
   }
+
+  // if (contextSummary && chat?._history) {
+  //   const alreadyInjected = chat._history.some(
+  //     (entry) =>
+  //       entry.role === "model" &&
+  //       entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
+  //   );
+
+  //   if (!alreadyInjected) {
+  //     chat._history.unshift({
+  //       role: "model",
+  //       parts: [{ text: contextSummary }],
+  //     });
+  //     chat._history.unshift({
+  //       role: "user",
+  //       parts: [{ text: "[context-restore]" }],
+  //     });
+  //     // console.log(`📍 Context injected for: ${senderId}`);
+  //   } else {
+  //     const modelEntryIndex = chat._history.findIndex(
+  //       (entry) =>
+  //         entry.role === "model" &&
+  //         entry.parts?.[0]?.text?.startsWith("[SYSTEM CONTEXT]"),
+  //     );
+  //     if (modelEntryIndex !== -1) {
+  //       chat._history[modelEntryIndex].parts[0].text = contextSummary;
+  //     }
+  //     // console.log(`☢️ Used context injected for: ${senderId}`);
+  //   }
+  // }
+
+  // // message push
+  // if (chat?._history) {
+  //   chat._history.push({ role: "user", parts: [{ text: messageText }] });
+  // }
 
   try {
     let totalInputTokens = 0;
