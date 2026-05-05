@@ -514,8 +514,6 @@ const handleAIFunctionWorkflow = async (
                 plainTextResults += productInfo + "\n";
               });
 
-              console.log(plainTextResults);
-
               toolResultResponse = {
                 results: plainTextResults.trim() || "No products found",
                 message:
