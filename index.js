@@ -34,6 +34,7 @@ const handleAIFunctionWorkflow = async (
     saveVertexUserSession,
     sendMessageWithRetry,
     fetchProductsByIds,
+    fetchProductDetailsById
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -414,32 +415,162 @@ const handleAIFunctionWorkflow = async (
               break;
             }
 
+            // case "fetchProductData": {
+            //   const searchParams = functionCall.args;
+            //   console.log(
+            //     `🔍 fetchProductData: product_name="${searchParams.product_name}"`,
+            //     searchParams,
+            //   );
+            //   console.log(functionCall.args);
+            //   const googleDataFromMongo = await fetchCombinedProductData(
+            //     app_id,
+            //     searchParams,
+            //   );
+
+            //   // Accumulate product results across multiple parallel calls
+            //   if (googleDataFromMongo.data?.length > 0) {
+            //     productResult = productResult
+            //       ? [...productResult, ...googleDataFromMongo.data]
+            //       : googleDataFromMongo.data;
+            //   }
+
+            //   toolResultResponse = {
+            //     results: googleDataFromMongo.data,
+            //     message:
+            //       googleDataFromMongo.data.length > 0
+            //         ? "Items found."
+            //         : "Out of stock.",
+            //   };
+            //   break;
+            // }
             case "fetchProductData": {
               const searchParams = functionCall.args;
               console.log(
                 `🔍 fetchProductData: product_name="${searchParams.product_name}"`,
                 searchParams,
               );
-              console.log(functionCall.args);
+
               const googleDataFromMongo = await fetchCombinedProductData(
                 app_id,
                 searchParams,
               );
 
-              // Accumulate product results across multiple parallel calls
               if (googleDataFromMongo.data?.length > 0) {
                 productResult = productResult
                   ? [...productResult, ...googleDataFromMongo.data]
                   : googleDataFromMongo.data;
               }
 
+              const INTERNAL_KEYS = new Set([
+                "_id",
+                "__v",
+                "_original",
+                "createdAt",
+                "updatedAt",
+                "app_id",
+                "spreadsheetId",
+                "searchScore",
+                "score",
+                "image",
+                "Image",
+              ]);
+
+              const HEAVY_FIELDS = new Set([
+                "Ingredients",
+                "Benefits",
+                "How to Use",
+                "ingredients",
+                "benefits",
+                "how_to_use",
+                "description",
+                "howToUse",
+                "how to use",
+              ]);
+
+              let plainTextResults = "";
+
+              (googleDataFromMongo.data || []).forEach((p, index) => {
+                let productInfo = `Product ${index + 1}\n`;
+
+                productInfo += `id ${p.id}\n`;
+                if (p.image) productInfo += `image ${p.image}\n`;
+
+                const original = p._original || {};
+                for (const [key, val] of Object.entries(original)) {
+                  if (INTERNAL_KEYS.has(key)) continue;
+                  if (val === null || val === undefined) continue;
+                  if (HEAVY_FIELDS.has(key)) continue;
+
+                  let cleanedKey = key.replace(/[:;{},[\]"']/g, "").trim();
+                  let cleanedVal = String(val)
+                    .replace(/[:;{},[\]"']/g, "")
+                    .replace(/\s+/g, " ")
+                    .trim();
+
+                  if (cleanedVal !== "") {
+                    productInfo += `${cleanedKey} ${cleanedVal}\n`;
+                  }
+                }
+                plainTextResults += productInfo + "\n";
+              });
+
+              console.log(plainTextResults);
+
               toolResultResponse = {
-                results: googleDataFromMongo.data,
+                results: plainTextResults.trim() || "No products found",
                 message:
-                  googleDataFromMongo.data.length > 0
-                    ? "Items found."
+                  plainTextResults.length > 0
+                    ? "Products found. Use fetchProductDetails if customer asks about details like ingredients, benefits, or usage."
                     : "Out of stock.",
               };
+              break;
+            }
+            case "fetchProductDetails": {
+              console.log("Looking product deatils:-", functionCall);
+              const args = functionCall.args;
+              const product_id =
+                args.product_id ||
+                args.producta_id ||
+                args.productId ||
+                args.id ||
+                Object.values(args)[0];
+
+              const raw = await fetchProductDetailsById(app_id, product_id);
+
+              if (!raw) {
+                toolResultResponse = { error: "Product not found." };
+                break;
+              }
+
+              const doc = raw.toObject ? raw.toObject() : raw;
+
+              const INTERNAL_KEYS = new Set([
+                "_id",
+                "__v",
+                "_original",
+                "createdAt",
+                "updatedAt",
+                "app_id",
+                "spreadsheetId",
+                "searchScore",
+                "score",
+                "image",
+                "Image",
+              ]);
+
+              let plainTextResult = "";
+
+              for (const [key, val] of Object.entries(doc)) {
+                if (INTERNAL_KEYS.has(key)) continue;
+                if (val === null || val === undefined) continue;
+
+                let cleanedVal = String(val).trim();
+                if (cleanedVal === "") continue;
+                cleanedVal = cleanedVal.replace(/\s+/g, " ");
+                plainTextResult += `${key}: ${cleanedVal}\n`;
+              }
+
+              toolResultResponse = { result: plainTextResult.trim() };
               break;
             }
 
