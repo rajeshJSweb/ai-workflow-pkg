@@ -261,7 +261,7 @@ const handleAIFunctionWorkflow = async (
     let totalTokens = 0;
 
     console.log(
-      `💬 [Chat: Incoming message from user ${from}: "${messageText}"`,
+      `💬 [Chat: Incoming message from ${from}: "${messageText}"`,
     );
     // let response = await chat.sendMessage(messageText);
     let response = await sendMessageWithRetry(chat, messageText);
