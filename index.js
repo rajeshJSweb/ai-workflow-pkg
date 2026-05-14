@@ -34,7 +34,7 @@ const handleAIFunctionWorkflow = async (
     saveVertexUserSession,
     sendMessageWithRetry,
     fetchProductsByIds,
-    fetchProductDetailsById
+    fetchProductDetailsById,
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -203,7 +203,7 @@ const handleAIFunctionWorkflow = async (
         role: "user",
         parts: [{ text: "[context-restore]" }],
       });
-      console.log(`Context injected for: ${senderId}`);
+      // console.log(`Context injected for: ${senderId}`);
     } else {
       const modelEntryIndex = chat.historyInternal.findIndex(
         (entry) =>
@@ -260,6 +260,9 @@ const handleAIFunctionWorkflow = async (
     let totalOutputTokens = 0;
     let totalTokens = 0;
 
+    console.log(
+      `💬 [Chat: Incoming message from user ${from}: "${messageText}"`,
+    );
     // let response = await chat.sendMessage(messageText);
     let response = await sendMessageWithRetry(chat, messageText);
 
