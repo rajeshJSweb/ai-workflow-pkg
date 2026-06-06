@@ -2,6 +2,7 @@ const handleAIFunctionWorkflow = async (
   app_id,
   messageText,
   from,
+  languageCode,
   senderId,
   sessionId,
   providedSecret,
@@ -130,6 +131,7 @@ const handleAIFunctionWorkflow = async (
     app_id,
     senderId,
     finalRobustInstruction,
+    languageCode,
   );
 
   // ─────────────────────────────────────────────────────────────────────────
