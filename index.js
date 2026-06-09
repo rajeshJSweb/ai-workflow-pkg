@@ -36,6 +36,8 @@ const handleAIFunctionWorkflow = async (
     sendMessageWithRetry,
     fetchProductsByIds,
     fetchProductDetailsById,
+    resolveSystemInstruction,
+    renderSystemInstruction,
   } = handlers;
 
   const appData = await App.findOne({ app_id });
@@ -80,23 +82,40 @@ const handleAIFunctionWorkflow = async (
 
   const domain = currentDomain.toUpperCase();
   const companyName = appData?.company || "Our Service";
+  const serviceType = appData?.service || "customer_service";
+
+  const instructionType = "non-voice";
+
+  const adminRawInstruction = await resolveSystemInstruction(
+    app_id,
+    serviceType,
+    instructionType,
+  );
 
   let finalRobustInstruction;
 
-  if (appData?.service === "ecommerce") {
-    finalRobustInstruction = geminiSystemInstruction(
-      domain,
-      customInstructionText,
+  if (adminRawInstruction) {
+    finalRobustInstruction = renderSystemInstruction(adminRawInstruction, {
       companyName,
-    );
+      domain,
+      clientInstruction: customInstructionText,
+    });
   } else {
-    finalRobustInstruction = coreSystemInstructionNoneEcommerce(
-      domain,
-      customInstructionText,
-      companyName,
-      null,
-      null,
-    );
+    if (serviceType === "ecommerce") {
+      finalRobustInstruction = geminiSystemInstruction(
+        domain,
+        customInstructionText,
+        companyName,
+      );
+    } else {
+      finalRobustInstruction = coreSystemInstructionNoneEcommerce(
+        domain,
+        customInstructionText,
+        companyName,
+        null,
+        null,
+      );
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
